@@ -1,11 +1,20 @@
 import requests
 from bs4 import BeautifulSoup
 import time
+from selenium import webdriver
+from selenium.webdriver import FirefoxService as Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from time import sleep
+
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from telegram import Update
 
 firstRunWoko = True
 firstRunWGRoom = True
+
+MAX_PAGES = 5
 
 def main():
     #setup of telegram api to listen updates
@@ -22,7 +31,10 @@ def main():
     #60 second loop that runs forever
     while True:
         scrapeWoko()
-        scrapeWGZimmer()
+        try:
+            scrapeWGZimmer()
+        except:
+            print("Error in scraping WGZimmer")
         print("Searching for new rooms...")
         time.sleep(60)
 
@@ -99,89 +111,93 @@ def scrapeWGZimmer():
 
     #this website is a little bit different, I have to send
     #a post request to simulate the click of the search button
-    cookies = {
-        'wc_language': 'en',
-        'wc_currencyLocale': 'de_CH',
-        'wc_color': 'babyblue',
-        'wc_email': 'info@wgzimmer.ch',
-        'wc_currencySign': 'sFr.',
-        'JSESSIONID': 'E4841F478C05C1CC9E81AB91300FF5E6',
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:99.0) Gecko/20100101 Firefox/99.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        # 'Accept-Encoding': 'gzip, deflate, br',
-        'Origin': 'https://www.wgzimmer.ch',
-        'Connection': 'keep-alive',
-        'Referer': 'https://www.wgzimmer.ch/en/wgzimmer/search/mate.html?wgSearchStartOver=true',
-        # Requests sorts cookies= alphabetically
-        # 'Cookie': 'wc_language=en; wc_currencyLocale=de_CH; wc_color=babyblue; wc_email=info@wgzimmer.ch; wc_currencySign=sFr.; JSESSIONID=E4841F478C05C1CC9E81AB91300FF5E6',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        'Sec-Fetch-User': '?1',
-        # Requests doesn't support trailers
-        # 'TE': 'trailers',
-    }
-    
-    data = {
-        'query': '',
-        'priceMin': '200',
-        'priceMax': '700',
-        'state': 'zurich-stadt',
-        'permanent': 'all',
-        'student': 'none',
-        'typeofwg': 'all',
-        'orderBy': '@sortDate',
-        'orderDir': 'descending',
-        'startSearchMate': 'true',
-        'wgStartSearch': 'true',
-        'start': '0',
-    }
 
-    #request is made
-    response = requests.post('https://www.wgzimmer.ch/en/wgzimmer/search/mate.html?', headers=headers, cookies=cookies, data=data)
 
-    #all html
-    soup = BeautifulSoup(response.text,'html.parser')
-    #only ads html
-    adsHtml = soup.find_all("li", {"class": "search-result-entry search-mate-entry"})
-   
+    service = Service("/snap/bin/firefox.geckodriver")
+    driver = webdriver.Firefox( service=service)
+    driver.get("https://www.wgzimmer.ch/wgzimmer/search/mate.html")
+
+    consent_button = driver.find_element(By.CSS_SELECTOR, ".fc-cta-consent")
+    consent_button.click()
+
+    zurich_button = driver.find_element(By.CSS_SELECTOR, "span.stateShortcut:nth-child(10)")
+    zurich_button.click()
+
+    search_button = driver.find_element(By.CSS_SELECTOR, ".button-wrapper > input:nth-child(1)")
+    search_button.click()
+
+    result_list = None
+
+    while result_list is None:
+        time.sleep(5)
+
+        try: 
+            result_list = driver.find_element(By.ID, "search-result-list")
+        except:
+            continue
+
+    adsHtml = []
+
+    for i in range(MAX_PAGES):
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        adsHtml += soup.find_all("li", {"class": "search-result-entry search-mate-entry"})
+
+        if i == MAX_PAGES-1:
+            break
+
+        page_no = driver.find_element(By.CSS_SELECTOR, "div.result-navigation:nth-child(6) > div:nth-child(3) > span:nth-child(2)")
+        page_no = page_no.text.split(" ")[1]
+        page_no = page_no.partition("/")
+        if page_no[0] == page_no[2]:
+            break
+
+        try:
+            next_button = driver.find_element(By.CSS_SELECTOR, "div.result-navigation:nth-child(6) > div:nth-child(3) > a:nth-child(3)")
+            next_button.click()
+        except:
+            break
+
+        sleep(1)
+
+    driver.quit()
+
     #for every ad  
     for adv in adsHtml:
         finalMsgArray = []
+        price = ""
 
         #text is filtered and prettified (is that a word?)
         data = adv.find_all("strong")
         counter = 0
         for d in data:
+            if counter==2:
+                untilData =" ".join(d.parent.text[1:].split(" ")[1:])
             d = d.text
             if counter == 0:
-                b = d[1:]
-                b = "Creation date: "+b[:-13]
+                b = "Creation date: "+ d[1:]
                 finalMsgArray.append(b)
             elif d=="\n":
                 a = 1
             elif counter==2:
                 finalMsgArray.append("From: "+d)
+            elif counter==3:
+                price = d
             else:
                 finalMsgArray.append(d)
             counter+=1
         
         #this piece of data couldn't be found in <strong>, and so I'm taking it manually
-        text = adv.find_all(text=True)
-        untilData = text[29]
-        untilData = untilData[1:]
+        # untilData = text[29]
+        # untilData = untilData[1:]
 
-        temp = finalMsgArray[3]
-        finalMsgArray[3] = untilData
-        finalMsgArray.append(temp[1:])
+        # temp = finalMsgArray[3]
+        # finalMsgArray[3] = untilData
+        # finalMsgArray.append(temp[1:])
 
         #price is filtered for later
-        price = temp[5:-3]
+        # price = temp[5:-3]
+
+        finalMsgArray.append(untilData)
 
         finalMsg = ""
         for i in finalMsgArray:
@@ -189,9 +205,12 @@ def scrapeWGZimmer():
         
         #url is taken
         a_class = adv.find_all('a')
-        url = a_class[1].get('href')
+        url = a_class[0].get('href')
         url = 'https://www.wgzimmer.ch' + url
         finalMsg += url + "\n"
+
+        # print(finalMsg)
+        # print("Price: " + price)
 
         #if url already exists 
         if url not in existingAdvWGZimmer:
