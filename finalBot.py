@@ -113,8 +113,10 @@ def scrapeWGZimmer():
     #a post request to simulate the click of the search button
 
 
-    service = Service("/snap/bin/firefox.geckodriver")
-    driver = webdriver.Firefox( service=service)
+    # service = Service("/snap/bin/firefox.geckodriver")
+    # driver = webdriver.Firefox( service=service)
+
+    driver = webdriver.Firefox()
     driver.get("https://www.wgzimmer.ch/wgzimmer/search/mate.html")
 
     consent_button = driver.find_element(By.CSS_SELECTOR, ".fc-cta-consent")
